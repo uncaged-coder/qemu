@@ -34,10 +34,7 @@
 #include "hw/arm/allwinner-h3.h"
 
 /* Memory map */
-const hwaddr allwinner_h3_memmap[] = {
-    [AW_H3_SRAM_A1]    = 0x00000000,
-    [AW_H3_SRAM_A2]    = 0x00044000,
-    [AW_H3_SRAM_C]     = 0x00010000,
+const hwaddr allwinner_common_memmap[] = {
     [AW_H3_SYSCTRL]    = 0x01c00000,
     [AW_H3_MMC0]       = 0x01c0f000,
     [AW_H3_SID]        = 0x01c14000,
@@ -68,12 +65,21 @@ const hwaddr allwinner_h3_memmap[] = {
     [AW_H3_SDRAM]      = 0x40000000
 };
 
+const hwaddr allwinner_h3_memmap[] = {
+    [AW_H3_SRAM_A1]    = 0x00000000,
+    [AW_H3_SRAM_A2]    = 0x00044000,
+    [AW_H3_SRAM_C]     = 0x00010000,
+};
+
+
 /* List of unimplemented devices */
-struct AwH3Unimplemented {
+typedef struct AwH3Unimplemented {
     const char *device_name;
     hwaddr base;
     hwaddr size;
-} unimplemented[] = {
+} AwH3Unimplemented;
+
+AwH3Unimplemented unimplemented[] = {
     { "d-engine",  0x01000000, 4 * MiB },
     { "d-inter",   0x01400000, 128 * KiB },
     { "dma",       0x01c02000, 4 * KiB },
@@ -133,6 +139,9 @@ struct AwH3Unimplemented {
     { "tsgen-ro",  0x3f506000, 4 * KiB },
     { "tsgen-ctl", 0x3f507000, 4 * KiB },
     { "ddr-mem",   0x40000000, 2 * GiB },
+};
+
+AwH3Unimplemented h3_unimplemented[] = {
     { "n-brom",    0xffff0000, 32 * KiB },
     { "s-brom",    0xffff0000, 64 * KiB }
 };
@@ -183,19 +192,16 @@ void allwinner_h3_bootrom_setup(AwH3State *s, BlockBackend *blk)
     }
 
     rom_add_blob("allwinner-h3.bootrom", buffer, rom_size,
-                  rom_size, s->memmap[AW_H3_SRAM_A1],
+                  rom_size, s->h3_memmap[AW_H3_SRAM_A1],
                   NULL, NULL, NULL, NULL, false);
 }
 
-static void allwinner_h3_init(Object *obj)
+void allwinner_h3_common_init(Object *obj, AwH3State *s, const char *typename)
 {
-    AwH3State *s = AW_H3(obj);
-
-    s->memmap = allwinner_h3_memmap;
+    s->memmap = allwinner_common_memmap;
 
     for (int i = 0; i < AW_H3_NUM_CPUS; i++) {
-        object_initialize_child(obj, "cpu[*]", &s->cpus[i],
-                                ARM_CPU_TYPE_NAME("cortex-a7"));
+        object_initialize_child(obj, "cpu[*]", &s->cpus[i], typename);
     }
 
     object_initialize_child(obj, "gic", &s->gic, TYPE_ARM_GIC);
@@ -229,9 +235,25 @@ static void allwinner_h3_init(Object *obj)
     object_initialize_child(obj, "rtc", &s->rtc, TYPE_AW_RTC_SUN6I);
 }
 
-static void allwinner_h3_realize(DeviceState *dev, Error **errp)
+static void allwinner_h3_init(Object *obj)
 {
-    AwH3State *s = AW_H3(dev);
+    AwH3State *s = AW_H3(obj);
+
+    s->h3_memmap = allwinner_h3_memmap;
+    allwinner_h3_common_init(obj, s, ARM_CPU_TYPE_NAME("cortex-a7"));
+}
+
+static void allwinner_create_unimplemented_devices(AwH3Unimplemented *u, unsigned size)
+{
+    unsigned i;
+
+    for (i = 0; i < size; i++) {
+        create_unimplemented_device(u[i].device_name, u[i].base, u[i].size);
+    }
+}
+
+void allwinner_h3_common_realize(DeviceState *dev, AwH3State *s, Error **errp)
+{
     unsigned i;
 
     /* CPUs */
@@ -317,20 +339,6 @@ static void allwinner_h3_realize(DeviceState *dev, Error **errp)
                        qdev_get_gpio_in(DEVICE(&s->gic), AW_H3_GIC_SPI_TIMER0));
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->timer), 1,
                        qdev_get_gpio_in(DEVICE(&s->gic), AW_H3_GIC_SPI_TIMER1));
-
-    /* SRAM */
-    memory_region_init_ram(&s->sram_a1, OBJECT(dev), "sram A1",
-                            64 * KiB, &error_abort);
-    memory_region_init_ram(&s->sram_a2, OBJECT(dev), "sram A2",
-                            32 * KiB, &error_abort);
-    memory_region_init_ram(&s->sram_c, OBJECT(dev), "sram C",
-                            44 * KiB, &error_abort);
-    memory_region_add_subregion(get_system_memory(), s->memmap[AW_H3_SRAM_A1],
-                                &s->sram_a1);
-    memory_region_add_subregion(get_system_memory(), s->memmap[AW_H3_SRAM_A2],
-                                &s->sram_a2);
-    memory_region_add_subregion(get_system_memory(), s->memmap[AW_H3_SRAM_C],
-                                &s->sram_c);
 
     /* Clock Control Unit */
     sysbus_realize(SYS_BUS_DEVICE(&s->ccu), &error_fatal);
@@ -422,11 +430,31 @@ static void allwinner_h3_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->rtc), 0, s->memmap[AW_H3_RTC]);
 
     /* Unimplemented devices */
-    for (i = 0; i < ARRAY_SIZE(unimplemented); i++) {
-        create_unimplemented_device(unimplemented[i].device_name,
-                                    unimplemented[i].base,
-                                    unimplemented[i].size);
-    }
+    allwinner_create_unimplemented_devices(unimplemented, ARRAY_SIZE(unimplemented));
+}
+
+static void allwinner_h3_realize(DeviceState *dev, Error **errp)
+{
+    AwH3State *s = AW_H3(dev);
+
+	allwinner_h3_common_realize(dev, s, errp);
+
+    /* SRAM */
+    memory_region_init_ram(&s->sram_a1, OBJECT(dev), "sram A1",
+                            64 * KiB, &error_abort);
+    memory_region_init_ram(&s->sram_a2, OBJECT(dev), "sram A2",
+                            32 * KiB, &error_abort);
+    memory_region_init_ram(&s->sram_c, OBJECT(dev), "sram C",
+                            44 * KiB, &error_abort);
+    memory_region_add_subregion(get_system_memory(), s->h3_memmap[AW_H3_SRAM_A1],
+                                &s->sram_a1);
+    memory_region_add_subregion(get_system_memory(), s->h3_memmap[AW_H3_SRAM_A2],
+                                &s->sram_a2);
+    memory_region_add_subregion(get_system_memory(), s->h3_memmap[AW_H3_SRAM_C],
+                                &s->sram_c);
+
+	allwinner_create_unimplemented_devices(h3_unimplemented
+			, ARRAY_SIZE(h3_unimplemented));
 }
 
 static void allwinner_h3_class_init(ObjectClass *oc, void *data)

@@ -36,6 +36,10 @@ config CUBIEBOARD
     bool
     select ALLWINNER_A10
 
+config PINEPHONE
+    bool
+    select ALLWINNER_A64
+
 config DIGIC
     bool
     select PTIMER
@@ -288,6 +292,14 @@ config ZYNQ
 
 config ARM_V7M
     bool
+
+config ALLWINNER_A64
+    bool
+	select ALLWINNER_A10_PIT
+    select SERIAL
+	select ARM_TIMER
+	select ARM_GIC
+	select UNIMP
 
 config ALLWINNER_A10
     bool
